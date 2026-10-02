@@ -1,0 +1,50 @@
+{
+  "name": "IINA Plex Sync",
+  "identifier": "io.github.iina-plex-sync",
+  "version": "1.0.0",
+  "description": "Sign in with Plex and scrobble local IINA playback (progress + watched at 90%) to your Plex account.",
+  "author": {
+    "name": "kevllarco",
+    "url": "https://github.com/kevllarco/iina-plex-sync"
+  },
+  "ghRepo": "kevllarco/iina-plex-sync",
+  "ghVersion": 1,
+  "entry": "main.js",
+  "globalEntry": "global.js",
+  "preferencesPage": "pref.html",
+  "preferenceDefaults": {
+    "client_id": "",
+    "signed_in": false,
+    "plex_username": "",
+    "plex_server_name": "",
+    "plex_server_uri": "",
+    "plex_server_uris": "[]",
+    "servers_json": "[]",
+    "servers_names": "",
+    "plex_access_token": "",
+    "token_in_prefs": false,
+    "progress_threshold": 90,
+    "enable_osd": true,
+    "enable_hud": true,
+    "hud_anchor": "tl",
+    "hud_fx": 0,
+    "hud_fy": 0,
+    "hud_x": 16,
+    "hud_y": 16,
+    "sync_enabled": true,
+    "index_built_at": "",
+    "index_count": 0,
+    "library_index_json": "",
+    "ui_command": "",
+    "ui_command_player": "",
+    "last_scrobble_at": "",
+    "last_scrobble_title": "",
+    "last_scrobble_event": ""
+  },
+  "permissions": [
+    "network-request",
+    "show-osd",
+    "video-overlay"
+  ],
+  "allowedDomains": ["*"]
+}

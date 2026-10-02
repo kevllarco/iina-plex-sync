@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #drag-shield {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        cursor: grabbing;
+      }
+      /* Look only — no top/left/right/bottom here. JS owns placement. */
+      #hud {
+        position: absolute;
+        z-index: 2;
+        width: 300px;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.72);
+        color: #f2f2f2;
+        font: 12px/1.35 -apple-system, BlinkMacSystemFont, sans-serif;
+        letter-spacing: 0.01em;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+        cursor: grab;
+        opacity: 1;
+        transition: opacity 0.14s ease, box-shadow 0.12s ease;
+      }
+      #hud.dragging {
+        cursor: grabbing;
+        opacity: 0.92;
+        transition: none;
+      }
+      #hud.resizing {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.12s ease;
+      }
+      #hud.snap-preview {
+        box-shadow: 0 0 0 1px rgba(109, 255, 168, 0.55),
+          0 2px 12px rgba(0, 0, 0, 0.35);
+      }
+      #hud .title {
+        font-weight: 700;
+        font-size: 13px;
+        margin-bottom: 4px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #hud .ok {
+        color: #6dffa8;
+      }
+      #hud .warn {
+        color: #ffd56d;
+      }
+      #hud .bad {
+        color: #ff8e8e;
+      }
+      #hud .muted {
+        color: rgba(255, 255, 255, 0.65);
+      }
+      #hud .mono {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 11px;
+      }
+      #hud .row {
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #hud .hint {
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="drag-shield" data-clickable></div>
+    <div id="hud" data-clickable>
+      <div class="title" data-clickable>
+        Plex Sync · <span id="status" class="warn" data-clickable>IDLE</span>
+      </div>
+      <div id="account" class="row muted" data-clickable></div>
+      <div id="file" class="row" data-clickable></div>
+      <div id="detail" class="row mono muted" data-clickable></div>
+      <div id="geek" class="row mono muted" data-clickable></div>
+      <div class="row muted hint" data-clickable>
+        Drag · snaps · ⌃⇧P HUD · ⌃⇧S sync
+      </div>
+    </div>
+    <script>
+      (function () {
+        const INSET = 16;
+        const SNAP_PX = 36;
+        const ANCHORS = { tl: 1, tr: 1, bl: 1, br: 1 };
+        const AUTO = "auto";
+
+        const hud = document.getElementById("hud");
+        const shield = document.getElementById("drag-shield");
+        const el = {
+          status: document.getElementById("status"),
+          account: document.getElementById("account"),
+          file: document.getElementById("file"),
+          detail: document.getElementById("detail"),
+          geek: document.getElementById("geek"),
+        };
+
+        let dragging = false;
+        let offsetX = 0;
+        let offsetY = 0;
+        let posInitialized = false;
+        let layout = { anchor: "tl", fx: 0, fy: 0 };
+        let current = { x: INSET, y: INSET };
+        let resizeTimer = null;
+        const RESIZE_SETTLE_MS = 220;
+
+        function clamp(n, min, max) {
+          return Math.max(min, Math.min(max, n));
+        }
+
+        function px(n) {
+          return Math.round(n) + "px";
+        }
+
+        /** Always set all four edges so stylesheet/cascade can never stretch the box. */
+        function setEdges(left, top, right, bottom) {
+          hud.style.left = left == null ? AUTO : left;
+          hud.style.top = top == null ? AUTO : top;
+          hud.style.right = right == null ? AUTO : right;
+          hud.style.bottom = bottom == null ? AUTO : bottom;
+        }
+
+        function syncCurrent() {
+          const rect = hud.getBoundingClientRect();
+          current = {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+          };
+          return current;
+        }
+
+        function bounds() {
+          return {
+            maxX: Math.max(0, window.innerWidth - hud.offsetWidth),
+            maxY: Math.max(0, window.innerHeight - hud.offsetHeight),
+          };
+        }
+
+        /** Free placement: left + top only. */
+        function setPixelPos(x, y) {
+          const b = bounds();
+          const left = clamp(Math.round(x), 0, b.maxX);
+          const top = clamp(Math.round(y), 0, b.maxY);
+          setEdges(px(left), px(top), AUTO, AUTO);
+          current = { x: left, y: top };
+          return current;
+        }
+
+        /** Corner: exactly two inset edges; the other two always auto. */
+        function applyAnchor(anchor) {
+          const inset = px(INSET);
+          switch (anchor) {
+            case "tr":
+              setEdges(AUTO, inset, inset, AUTO);
+              break;
+            case "bl":
+              setEdges(inset, AUTO, AUTO, inset);
+              break;
+            case "br":
+              setEdges(AUTO, AUTO, inset, inset);
+              break;
+            case "tl":
+            default:
+              setEdges(inset, inset, AUTO, AUTO);
+              break;
+          }
+          return syncCurrent();
+        }
+
+        function fractionsFromPos(x, y) {
+          const b = bounds();
+          return {
+            fx: b.maxX > 0 ? clamp(x / b.maxX, 0, 1) : 0,
+            fy: b.maxY > 0 ? clamp(y / b.maxY, 0, 1) : 0,
+          };
+        }
+
+        function detectSnap(x, y) {
+          const b = bounds();
+          const nearL = x <= SNAP_PX;
+          const nearR = x >= b.maxX - SNAP_PX;
+          const nearT = y <= SNAP_PX;
+          const nearB = y >= b.maxY - SNAP_PX;
+          if (nearT && nearL) return "tl";
+          if (nearT && nearR) return "tr";
+          if (nearB && nearL) return "bl";
+          if (nearB && nearR) return "br";
+          return "free";
+        }
+
+        function applyLayout() {
+          if (layout.anchor && ANCHORS[layout.anchor]) {
+            return applyAnchor(layout.anchor);
+          }
+          const b = bounds();
+          const fx = Number.isFinite(layout.fx) ? layout.fx : 0;
+          const fy = Number.isFinite(layout.fy) ? layout.fy : 0;
+          return setPixelPos(fx * b.maxX, fy * b.maxY);
+        }
+
+        function commitFromPixels(x, y, doSnap) {
+          const snapped = doSnap ? detectSnap(x, y) : "free";
+          if (snapped !== "free") {
+            layout = { anchor: snapped, fx: 0, fy: 0 };
+            const pos = applyAnchor(snapped);
+            hud.classList.remove("snap-preview");
+            return { anchor: snapped, fx: 0, fy: 0, x: pos.x, y: pos.y };
+          }
+          const fr = fractionsFromPos(x, y);
+          layout = { anchor: "free", fx: fr.fx, fy: fr.fy };
+          const pos = setPixelPos(x, y);
+          hud.classList.remove("snap-preview");
+          return {
+            anchor: "free",
+            fx: fr.fx,
+            fy: fr.fy,
+            x: pos.x,
+            y: pos.y,
+          };
+        }
+
+        function postLayout(extra) {
+          try {
+            iina.postMessage(
+              "hud-moved",
+              Object.assign(
+                {
+                  anchor: layout.anchor,
+                  fx: layout.fx,
+                  fy: layout.fy,
+                  x: current.x,
+                  y: current.y,
+                },
+                extra || {}
+              )
+            );
+          } catch (e) {}
+        }
+
+        function setText(node, text) {
+          const t = text || "";
+          if (node.textContent !== t) node.textContent = t;
+          node.style.display = t ? "" : "none";
+        }
+
+        function applyFromMessage(data) {
+          if (data.anchor && ANCHORS[data.anchor]) {
+            layout = { anchor: data.anchor, fx: 0, fy: 0 };
+            applyLayout();
+            return true;
+          }
+          if (
+            data.anchor === "free" &&
+            typeof data.fx === "number" &&
+            typeof data.fy === "number"
+          ) {
+            layout = {
+              anchor: "free",
+              fx: clamp(data.fx, 0, 1),
+              fy: clamp(data.fy, 0, 1),
+            };
+            applyLayout();
+            return true;
+          }
+          if (typeof data.x === "number" && typeof data.y === "number") {
+            const pos = setPixelPos(data.x, data.y);
+            const fr = fractionsFromPos(pos.x, pos.y);
+            layout = { anchor: "free", fx: fr.fx, fy: fr.fy };
+            postLayout();
+            return true;
+          }
+          return false;
+        }
+
+        function onUpdate(data) {
+          if (!data) return;
+          const hasLayoutHint =
+            (data.anchor && ANCHORS[data.anchor]) ||
+            data.anchor === "free" ||
+            (typeof data.x === "number" && typeof data.y === "number");
+          if (hasLayoutHint) {
+            applyFromMessage(data);
+            posInitialized = true;
+          } else if (!posInitialized) {
+            layout = { anchor: "tl", fx: 0, fy: 0 };
+            applyLayout();
+            posInitialized = true;
+          }
+          const status = data.status || "IDLE";
+          el.status.textContent = status;
+          el.status.className =
+            status === "ACTIVE" || status === "WATCHED"
+              ? "ok"
+              : status === "NO MATCH"
+                ? "bad"
+                : "warn";
+          setText(el.account, data.accountLine || "");
+          setText(el.file, data.file || "");
+          setText(el.detail, data.detail || "");
+          setText(el.geek, data.geek || "");
+        }
+
+        function startDrag(ev) {
+          dragging = true;
+          hud.classList.add("dragging");
+          hud.classList.remove("snap-preview");
+          const rect = hud.getBoundingClientRect();
+          setPixelPos(rect.left, rect.top);
+          shield.style.display = "block";
+          offsetX = ev.clientX - rect.left;
+          offsetY = ev.clientY - rect.top;
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+
+        function moveDrag(ev) {
+          if (!dragging) return;
+          const rawX = ev.clientX - offsetX;
+          const rawY = ev.clientY - offsetY;
+          const snap = detectSnap(rawX, rawY);
+          if (snap !== "free") {
+            applyAnchor(snap);
+            hud.classList.add("snap-preview");
+          } else {
+            setPixelPos(rawX, rawY);
+            hud.classList.remove("snap-preview");
+          }
+          ev.preventDefault();
+        }
+
+        function endDrag(ev) {
+          if (!dragging) return;
+          dragging = false;
+          hud.classList.remove("dragging");
+          shield.style.display = "none";
+          const rawX =
+            (ev && typeof ev.clientX === "number"
+              ? ev.clientX
+              : current.x + offsetX) - offsetX;
+          const rawY =
+            (ev && typeof ev.clientY === "number"
+              ? ev.clientY
+              : current.y + offsetY) - offsetY;
+          const useX = hud.classList.contains("snap-preview")
+            ? current.x
+            : rawX;
+          const useY = hud.classList.contains("snap-preview")
+            ? current.y
+            : rawY;
+          commitFromPixels(useX, useY, true);
+          posInitialized = true;
+          postLayout();
+        }
+
+        function endDragKeep() {
+          if (!dragging) return;
+          dragging = false;
+          hud.classList.remove("dragging");
+          shield.style.display = "none";
+          commitFromPixels(current.x, current.y, true);
+          posInitialized = true;
+          postLayout();
+        }
+
+        hud.addEventListener("mousedown", startDrag);
+        shield.addEventListener("mousedown", function (ev) {
+          ev.preventDefault();
+        });
+        shield.addEventListener("mousemove", moveDrag);
+        shield.addEventListener("mouseup", endDrag);
+        shield.addEventListener("mouseleave", endDragKeep);
+
+        window.addEventListener("resize", function () {
+          if (dragging) return;
+          if (!posInitialized) return;
+          // Fade out during the fullscreen/window animation; reposition once settled.
+          hud.classList.add("resizing");
+          hud.classList.remove("snap-preview");
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(function () {
+            resizeTimer = null;
+            applyLayout();
+            // Next frame so the new corner is applied before fade-in.
+            requestAnimationFrame(function () {
+              hud.classList.remove("resizing");
+            });
+          }, RESIZE_SETTLE_MS);
+        });
+
+        // Stay off-screen until plugin sends saved layout (avoids flashing top-left).
+        setEdges(px(-9999), px(-9999), AUTO, AUTO);
+
+        iina.onMessage("hud-update", onUpdate);
+        iina.onMessage("hud-hide", function () {
+          dragging = false;
+          if (resizeTimer) {
+            clearTimeout(resizeTimer);
+            resizeTimer = null;
+          }
+          hud.classList.remove("dragging");
+          hud.classList.remove("snap-preview");
+          hud.classList.remove("resizing");
+          shield.style.display = "none";
+        });
+        try {
+          iina.postMessage("hud-ready", {});
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>

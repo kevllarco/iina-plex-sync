@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      /* Non-scrolling webview: intrinsic height so only IINA's outer prefs scrollbar appears. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: visible;
+        /* IINA measures body.scrollHeight once on load — inflate so the pane fills. */
+        min-height: 560px;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 13px;
+        color: #111;
+        background: transparent;
+      }
+      .wrap {
+        padding: 12px 12px 28px;
+        box-sizing: border-box;
+        overflow: visible;
+      }
+      .pref-section {
+        margin-bottom: 12px;
+      }
+      .secondary {
+        color: rgba(0, 0, 0, 0.55);
+      }
+      .pref-help {
+        margin: 2px 0 0;
+      }
+      .small {
+        font-size: 11px;
+      }
+      .status {
+        font-weight: 600;
+      }
+      input[type="number"] {
+        width: 64px;
+        color: #111;
+        background: #fff;
+        border: 1px solid #bbb;
+        padding: 3px 6px;
+        border-radius: 4px;
+      }
+      button.action {
+        font-size: 13px;
+        margin-right: 8px;
+        margin-top: 6px;
+        color: #111;
+        background: #f2f2f2;
+        border: 1px solid #bbb;
+        border-radius: 4px;
+        padding: 4px 10px;
+      }
+      .server-picker {
+        margin-top: 4px;
+        position: relative;
+      }
+      .server-btn {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0;
+        padding: 7px 10px;
+        border-radius: 6px;
+        border: 1px solid #bbb;
+        color: #111;
+        background: #fff;
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .server-btn:disabled {
+        opacity: 0.8;
+        cursor: default;
+      }
+      .server-btn .chevron {
+        margin-left: 8px;
+        opacity: 0.55;
+        font-size: 10px;
+      }
+      .server-btn .label {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .server-menu {
+        display: none;
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: calc(100% + 4px);
+        z-index: 20;
+        margin: 0;
+        padding: 4px 0;
+        list-style: none;
+        border-radius: 6px;
+        border: 1px solid #bbb;
+        background: #fff;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+        max-height: 220px;
+        overflow-y: auto;
+      }
+      .server-menu.open {
+        display: block;
+      }
+      .server-menu li {
+        margin: 0;
+        padding: 7px 10px;
+        cursor: pointer;
+        color: #111;
+      }
+      .server-menu li:hover,
+      .server-menu li.active {
+        background: rgba(0, 122, 255, 0.12);
+      }
+      .server-menu li.active {
+        font-weight: 600;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          color: #eee;
+        }
+        .secondary {
+          color: rgba(255, 255, 255, 0.55);
+        }
+        input[type="number"],
+        button.action,
+        .server-btn,
+        .server-menu {
+          color: #eee;
+          background-color: #2c2c2c;
+          border-color: #666;
+        }
+        button.action {
+          background-color: #3a3a3a;
+        }
+        .server-menu li:hover,
+        .server-menu li.active {
+          background: rgba(10, 132, 255, 0.28);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="pref-section">
+        <div class="status" id="status">Not signed in</div>
+        <p class="small secondary pref-help" id="lastScrobble"></p>
+        <div style="margin-top: 6px">
+          <button type="button" class="action" id="btnSignIn">
+            Sign in with Plex
+          </button>
+          <button type="button" class="action" id="btnSignOut" style="display: none">
+            Sign out
+          </button>
+        </div>
+        <p class="small secondary pref-help" id="hint">
+          Or use <strong>Plugin → IINA Plex Sync</strong>.
+        </p>
+        <p class="small secondary pref-help" id="tokenNote" style="display: none">
+          Access token stored in prefs (Keychain write failed).
+        </p>
+      </div>
+
+      <div class="pref-section">
+        <label>
+          <input type="checkbox" data-type="bool" data-pref-key="enable_hud" />
+          Show sync status overlay on video
+        </label>
+        <p class="small secondary pref-help">
+          Sticky HUD — drag / corner snap. Toggle <strong>⌃⇧P</strong>.
+        </p>
+      </div>
+
+      <div class="pref-section">
+        <label>
+          <input type="checkbox" data-type="bool" data-pref-key="enable_osd" />
+          Show brief on-screen flashes
+        </label>
+        <p class="small secondary pref-help">
+          Short “Plex: syncing” / “marked watched” toasts.
+        </p>
+      </div>
+
+      <div class="pref-section">
+        <div>Plex server</div>
+        <div class="server-picker" id="serverPicker">
+          <button type="button" class="server-btn" id="serverBtn" disabled>
+            <span class="label" id="serverLabel">(sign in first)</span>
+            <span class="chevron" id="serverChevron" hidden>▼</span>
+          </button>
+          <ul class="server-menu" id="serverMenu" role="listbox"></ul>
+        </div>
+        <p class="small secondary pref-help">
+          Only needed if your account has more than one PMS.
+        </p>
+      </div>
+
+      <div class="pref-section">
+        <label>
+          Mark watched at
+          <input
+            type="number"
+            min="50"
+            max="100"
+            data-type="int"
+            data-pref-key="progress_threshold"
+          />
+          %
+        </label>
+      </div>
+
+      <div class="pref-section">
+        <label>
+          <input type="checkbox" data-type="bool" data-pref-key="sync_enabled" />
+          Sync playback to Plex
+        </label>
+        <p class="small secondary pref-help">
+          Timeline + watched at threshold. Toggle anytime with <strong>⌃⇧S</strong>
+          or Plugin → Pause/Resume Plex Sync.
+        </p>
+      </div>
+
+      <div class="pref-section">
+        <p class="small secondary" id="indexInfo"></p>
+      </div>
+    </div>
+
+    <script>
+      const { preferences } = window.iina;
+      let lastServerSig = null;
+      let cachedServers = [];
+      let menuOpen = false;
+      let lastGoodServerLabel = "";
+
+      function queueCommand(cmd) {
+        preferences.set("ui_command", cmd);
+        if (typeof preferences.sync === "function") preferences.sync();
+      }
+
+      function asString(v) {
+        if (v == null || v === false) return "";
+        return String(v).trim();
+      }
+
+      function asBool(v) {
+        return v === true || v === 1 || v === "1" || v === "true";
+      }
+
+      function closeServerMenu() {
+        menuOpen = false;
+        document.getElementById("serverMenu").classList.remove("open");
+      }
+
+      function openServerMenu() {
+        if (cachedServers.length < 2) return;
+        menuOpen = true;
+        document.getElementById("serverMenu").classList.add("open");
+      }
+
+      function applyServerChoice(name) {
+        if (!name) return;
+        // Prefs webview cannot read/write servers_json safely; global handles it.
+        preferences.set("ui_command", "select_server:" + name);
+        if (typeof preferences.sync === "function") preferences.sync();
+        closeServerMenu();
+        document.getElementById("hint").textContent =
+          "Switching to " + name + "…";
+        lastServerSig = null;
+        setTimeout(refreshStatus, 600);
+      }
+
+      function resolveServerLabel(names, current, signedIn) {
+        if (current) return current;
+        if (names.length) return names[0];
+        if (signedIn) {
+          if (
+            lastGoodServerLabel &&
+            lastGoodServerLabel !== "(sign in first)" &&
+            lastGoodServerLabel !== "Plex server"
+          ) {
+            return lastGoodServerLabel;
+          }
+          return "Plex server";
+        }
+        return "(sign in first)";
+      }
+
+      function renderServerPicker(names, current, signedIn) {
+        current = asString(current);
+        signedIn = !!signedIn;
+        names = names || [];
+
+        if (
+          !current &&
+          signedIn &&
+          lastGoodServerLabel &&
+          lastGoodServerLabel !== "(sign in first)"
+        ) {
+          current =
+            lastGoodServerLabel === "Plex server" ? "" : lastGoodServerLabel;
+        }
+
+        const display = resolveServerLabel(names, current, signedIn);
+        const sig =
+          names.join("\n") + "||" + display + "||" + (signedIn ? "1" : "0");
+        if (sig === lastServerSig) return;
+        lastServerSig = sig;
+        cachedServers = names.map(function (n) {
+          return { name: n };
+        });
+        lastGoodServerLabel = display;
+
+        const btn = document.getElementById("serverBtn");
+        const label = document.getElementById("serverLabel");
+        const chevron = document.getElementById("serverChevron");
+        const menu = document.getElementById("serverMenu");
+
+        closeServerMenu();
+        menu.innerHTML = "";
+        label.textContent = display;
+
+        if (!names.length) {
+          btn.disabled = true;
+          chevron.hidden = true;
+          return;
+        }
+
+        const multi = names.length > 1;
+        btn.disabled = !multi;
+        chevron.hidden = !multi;
+
+        names.forEach(function (name) {
+          const li = document.createElement("li");
+          li.setAttribute("role", "option");
+          li.dataset.name = name;
+          li.textContent = name;
+          if (name === display) li.classList.add("active");
+          li.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            applyServerChoice(name);
+          });
+          menu.appendChild(li);
+        });
+      }
+
+      function bindInputs() {
+        const inputs = document.querySelectorAll("[data-pref-key]");
+        Array.prototype.forEach.call(inputs, function (input) {
+          const key = input.dataset.prefKey;
+          const type = input.dataset.type;
+          preferences.get(key, function (value) {
+            if (type === "bool") {
+              input.checked =
+                value === undefined || value === null ? input.checked : !!value;
+              if (
+                key === "enable_hud" &&
+                (value === undefined || value === null)
+              ) {
+                input.checked = true;
+              }
+              if (
+                key === "enable_osd" &&
+                (value === undefined || value === null)
+              ) {
+                input.checked = true;
+              }
+              if (
+                key === "sync_enabled" &&
+                (value === undefined || value === null)
+              ) {
+                input.checked = true;
+              }
+            } else if (value != null) input.value = value;
+          });
+          input.addEventListener("change", function () {
+            let value;
+            if (type === "bool") value = input.checked;
+            else if (type === "int") value = parseInt(input.value, 10);
+            else value = input.value;
+            preferences.set(key, value);
+            if (key === "enable_hud") {
+              preferences.set(
+                "ui_command_player",
+                value ? "show_hud" : "hide_hud"
+              );
+              if (typeof preferences.sync === "function") preferences.sync();
+            }
+            if (key === "sync_enabled") {
+              preferences.set(
+                "ui_command_player",
+                value ? "enable_sync" : "disable_sync"
+              );
+              if (typeof preferences.sync === "function") preferences.sync();
+            }
+          });
+        });
+      }
+
+      function formatLastScrobble(event, title, at) {
+        if (!event || !at) return "";
+        const labels = {
+          syncing: "syncing",
+          watched: "marked watched",
+          no_match: "no library match",
+        };
+        const label = labels[event] || event;
+        let when = at;
+        try {
+          const d = new Date(at);
+          if (!isNaN(d.getTime())) {
+            when = d.toLocaleString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+              month: "short",
+              day: "numeric",
+            });
+          }
+        } catch (e) {}
+        return "Last: " + label + (title ? " · " + title : "") + " · " + when;
+      }
+
+      function refreshStatus() {
+        // Never preferences.get("servers_json") here — IINA's prefs bridge
+        // injects it as a broken JS string (unescaped quotes) and the callback
+        // chain dies, leaving the page stuck on "Not signed in".
+        preferences.get("signed_in", function (signedInRaw) {
+          const signedIn = asBool(signedInRaw);
+          preferences.get("plex_username", function (user) {
+            preferences.get("plex_server_name", function (serverRaw) {
+              const server = asString(serverRaw);
+              preferences.get("servers_names", function (namesRaw) {
+                const names = asString(namesRaw)
+                  .split("\n")
+                  .map(function (s) {
+                    return s.trim();
+                  })
+                  .filter(Boolean);
+                renderServerPicker(names, server, signedIn);
+
+                preferences.get("plex_server_uri", function (uri) {
+                  preferences.get("index_count", function (count) {
+                    preferences.get("index_built_at", function (built) {
+                      preferences.get("token_in_prefs", function (inPrefs) {
+                        preferences.get("last_scrobble_event", function (ev) {
+                          preferences.get("last_scrobble_title", function (title) {
+                            preferences.get("last_scrobble_at", function (at) {
+                              const status = document.getElementById("status");
+                              const indexInfo =
+                                document.getElementById("indexInfo");
+                              const tokenNote =
+                                document.getElementById("tokenNote");
+                              const btnIn = document.getElementById("btnSignIn");
+                              const btnOut =
+                                document.getElementById("btnSignOut");
+                              const lastEl =
+                                document.getElementById("lastScrobble");
+                              const hint = document.getElementById("hint");
+
+                              if (signedIn && user) {
+                                status.textContent =
+                                  "Signed in as " +
+                                  user +
+                                  (server ? " · " + server : "");
+                                btnIn.style.display = "none";
+                                btnOut.style.display = "inline-block";
+                              } else if (signedIn) {
+                                status.textContent =
+                                  "Signed in" +
+                                  (server ? " · " + server : "");
+                                btnIn.style.display = "none";
+                                btnOut.style.display = "inline-block";
+                              } else {
+                                status.textContent = "Not signed in";
+                                btnIn.style.display = "inline-block";
+                                btnOut.style.display = "none";
+                              }
+                              tokenNote.style.display = inPrefs
+                                ? "block"
+                                : "none";
+                              lastEl.textContent = formatLastScrobble(
+                                ev,
+                                title,
+                                at
+                              );
+                              indexInfo.textContent = count
+                                ? "Library index: " +
+                                  count +
+                                  " files" +
+                                  (built ? " (built " + built + ")" : "")
+                                : "On-demand matching (optional: Refresh Library Index).";
+                              if (uri && signedIn) {
+                                hint.textContent = "Active connection: " + uri;
+                              } else if (
+                                hint.textContent.indexOf("Opening browser") !== 0 &&
+                                hint.textContent.indexOf("Switching to") !== 0
+                              ) {
+                                hint.innerHTML =
+                                  "Or use <strong>Plugin → IINA Plex Sync</strong>.";
+                              }
+                            });
+                          });
+                        });
+                      });
+                    });
+                  });
+                });
+              });
+            });
+          });
+        });
+      }
+
+      document
+        .getElementById("btnSignIn")
+        .addEventListener("click", function () {
+          queueCommand("sign_in");
+          document.getElementById("hint").textContent =
+            "Opening browser for Plex login…";
+        });
+
+      document
+        .getElementById("btnSignOut")
+        .addEventListener("click", function () {
+          queueCommand("sign_out");
+          lastServerSig = null;
+          lastGoodServerLabel = "";
+          closeServerMenu();
+        });
+
+      document.getElementById("serverBtn").addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (cachedServers.length < 2) return;
+        if (menuOpen) closeServerMenu();
+        else openServerMenu();
+      });
+
+      document.addEventListener("click", function () {
+        if (menuOpen) closeServerMenu();
+      });
+
+      bindInputs();
+      refreshStatus();
+      setInterval(refreshStatus, 1500);
+    </script>
+  </body>
+</html>
