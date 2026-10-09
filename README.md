@@ -9,6 +9,8 @@ Open-source [IINA](https://iina.io) plugin that scrobbles **local** playback to 
 - Matches files by **basename + path tail (+ size when known)** — never title search
 - Sticky HUD (drag / corner snap); toggle HUD with **⌃⇧P**, pause sync with **⌃⇧S**
 
+![IINA Plex Sync HUD showing active playback progress](assets/plex-sync-active.png)
+
 ## Requirements
 
 - IINA 1.4+ recommended (1.3.2+ minimum)
